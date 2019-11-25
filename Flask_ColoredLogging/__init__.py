@@ -24,16 +24,64 @@ SOFTWARE.
 
 import flask
 import time
+import datetime
+import colors
+from rfc3339 import rfc3339
 
 
 class ColoredLogging(object):
     def __init__(
         self,
-        app: flask.Flask
+        app: flask.Flask,
+        exclusions: list = None,
+        no_log_ip: bool = False
     ) -> None:
         if app is not None:
             self.app = app
+        else:
+            raise ValueError("No app object was passed!")
+        if exclusions is not None:
+            self.exclusions = exclusions
+        else:
+            self.exclusions = []
+        self.no_log_ip = no_log_ip
 
+        self.app.before_request(self.before_inapp_request)
+        self.app.after_request(self.after_inapp_request)
 
-    def before_inapp_request():
-        self.app.g.start = time.time()
+    def before_inapp_request(self):
+        flask.g.start = time.time()
+
+    def after_inapp_request(self, response) -> flask.Response:
+        if flask.request.path in self.exclusions:
+            return response
+
+        now = time.time()
+        duration = round(now - flask.g.start, 2)
+        dt = datetime.datetime.fromtimestamp(now)
+        timestamp = rfc3339(dt, utc=True)
+
+        ip = flask.request.headers.get('X-Forwarded-For', flask.request.remote_addr)
+        host: str = flask.request.host.split(':', 1)[0]
+        args = dict(flask.request.args)
+        log_params: dict = [
+            ('method', flask.request.method, 'blue'),
+            ('path', flask.request.path, 'blue'),
+            ('status', response.status_code, 'yellow'),
+            ('duration', duration, 'green'),
+            ('time', timestamp, 'magenta'),
+            ('host', host, 'red'),
+            ('params', args, 'blue')
+        ]
+        if not self.no_log_ip:
+            log_params.append(('ip', ip, 'red'))
+
+        parts = []
+        for name, value, color in log_params:
+            part = colors.color(f"{name}={value}", fg=color)
+            parts.append(part)
+        line = " ".join(parts)
+
+        self.app.logger.info(line)
+
+        return response
